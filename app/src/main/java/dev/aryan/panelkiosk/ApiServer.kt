@@ -62,7 +62,7 @@ class ApiServer(
                 body = when (params["cmd"]) {
                     "screenOn" -> { screen.wake(); ok("screenOn") }
                     "screenOff" -> { screen.sleep(); ok("screenOff") }
-                    "deviceInfo" -> """{"appVersionName":"PanelKiosk 1.0","screenOn":${screen.screenOn}}"""
+                    "deviceInfo" -> """{"appVersionName":"PanelKiosk 1.1","screenOn":${screen.screenOn}}"""
                     "rebootDevice" ->
                         if (onReboot()) ok("rebootDevice")
                         else """{"status":"error","statustext":"needs device owner"}"""
