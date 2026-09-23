@@ -6,7 +6,17 @@
   <uses-permission android:name="android.permission.WAKE_LOCK" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+  <!-- Android 10-14: lets the boot receiver start the kiosk without it being the Home app -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+  <!-- Android 14+: a wake lock may only switch the screen on with this -->
+  <uses-permission android:name="android.permission.TURN_SCREEN_ON" />
+
+  <!-- Nothing here is required, so any phone, tablet or TV box can install it.
+       CAMERA would otherwise imply a mandatory back camera with autofocus. -->
+  <uses-feature android:name="android.hardware.camera" android:required="false" />
+  <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
   <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
   <application
     android:label="PanelKiosk"
@@ -15,19 +25,20 @@
     android:usesCleartextTraffic="true"
     android:supportsRtl="true">
 
+    <!-- showWhenLocked / turnScreenOn are applied in code for every Android version;
+         configChanges keeps rotation, folding and split-screen from reloading the page -->
     <activity
       android:name=".MainActivity"
       android:exported="true"
       android:launchMode="singleTask"
-      android:configChanges="orientation|screenSize|keyboardHidden"
-      android:showWhenLocked="true"
-      android:lockTaskMode="if_whitelisted"
-      android:turnScreenOn="true">
+      android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density"
+      android:lockTaskMode="if_whitelisted">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
-      <!-- optional: set PanelKiosk as the HOME app for a hard kiosk -->
+      <!-- optional: set PanelKiosk as the HOME app for a hard kiosk (the reliable
+           way to start on boot on Android 10+) -->
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.HOME" />
@@ -38,6 +49,11 @@
     <receiver android:name=".BootReceiver" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+        <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
       </intent-filter>
     </receiver>
 

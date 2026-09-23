@@ -9,16 +9,17 @@ android {
 
   defaultConfig {
     applicationId = "dev.aryan.panelkiosk"
-    minSdk = 26          // Android 8.0 — covers old LineageOS tablets
+    minSdk = 23          // Android 6.0; older WebViews are too old to run the dashboard anyway
     targetSdk = 35
-    versionCode = 2
-    versionName = "1.1"
+    versionCode = 3
+    versionName = "1.2"
   }
   buildTypes {
     release {
       isMinifyEnabled = false
     }
   }
+  buildFeatures { buildConfig = true }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17

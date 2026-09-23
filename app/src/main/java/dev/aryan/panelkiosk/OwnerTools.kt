@@ -3,6 +3,7 @@ package dev.aryan.panelkiosk
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.os.Build
 import android.provider.Settings
 
 /**
@@ -37,9 +38,9 @@ class OwnerTools(private val ctx: Context) {
         if (isOwner) runCatching { dpm.setStatusBarDisabled(admin, disabled) }
     }
 
-    /** Fully-API `rebootDevice`: real reboot, no root — device owner only. */
+    /** Fully-API `rebootDevice`: real reboot, no root — device owner on Android 7.0+ only. */
     fun reboot(): Boolean {
-        if (!isOwner) return false
+        if (!isOwner || Build.VERSION.SDK_INT < 24) return false
         return runCatching { dpm.reboot(admin) }.isSuccess
     }
 

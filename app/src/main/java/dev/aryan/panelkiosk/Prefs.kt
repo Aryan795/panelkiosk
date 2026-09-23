@@ -7,7 +7,7 @@ class Prefs(ctx: Context) {
     private val sp: SharedPreferences = ctx.getSharedPreferences("panelkiosk", Context.MODE_PRIVATE)
 
     var url: String
-        get() = sp.getString("url", "http://192.168.1.1:8080") ?: ""
+        get() = sp.getString("url", "") ?: ""
         set(v) = sp.edit().putString("url", v).apply()
 
     var apiPassword: String
@@ -32,6 +32,16 @@ class Prefs(ctx: Context) {
     var lockApp: Boolean
         get() = sp.getBoolean("lockApp", false)
         set(v) = sp.edit().putBoolean("lockApp", v).apply()
+
+    /** auto (follow the device) / landscape / portrait */
+    var orientation: String
+        get() = sp.getString("orientation", "auto") ?: "auto"
+        set(v) = sp.edit().putString("orientation", v).apply()
+
+    /** the battery-optimisation prompt is shown once; Settings offers it again */
+    var askedBattery: Boolean
+        get() = sp.getBoolean("askedBattery", false)
+        set(v) = sp.edit().putBoolean("askedBattery", v).apply()
 
     var configured: Boolean
         get() = sp.getBoolean("configured", false)

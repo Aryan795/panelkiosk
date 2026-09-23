@@ -47,12 +47,24 @@ class ScreenController(private val activity: Activity, private val blackout: Vie
             blackout.visibility = View.GONE
             setBrightness(-1f) // back to system brightness
 
-            // pulse the screen awake even if the system turned it off
+            // pulse the screen awake even if the system turned it off. The Activity
+            // methods exist from Android 8.1, keyguard dismissal from 8.0; older
+            // versions only understand the window flags.
             if (Build.VERSION.SDK_INT >= 27) {
                 activity.setTurnScreenOn(true)
                 activity.setShowWhenLocked(true)
+            } else {
+                @Suppress("DEPRECATION")
+                activity.window.addFlags(
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                )
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
                 (activity.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager)
                     .requestDismissKeyguard(activity, null)
+            } else {
+                @Suppress("DEPRECATION")
+                activity.window.addFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
             }
             val pm = activity.getSystemService(Context.POWER_SERVICE) as PowerManager
             @Suppress("DEPRECATION")

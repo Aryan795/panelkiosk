@@ -20,8 +20,10 @@ class MotionDetector(
 ) {
     private val executor = Executors.newSingleThreadExecutor()
     private var provider: ProcessCameraProvider? = null
+    private var analysis: ImageAnalysis? = null
     private var prev: FloatArray? = null
     private var consecutive = 0
+    @Volatile private var stopped = false
     @Volatile private var skipFrames = 4
     @Volatile private var lastSampleMs = 0L
     @Volatile var sensitivity: String = "medium"
@@ -35,36 +37,56 @@ class MotionDetector(
         else -> 22 to 0.06f
     }
 
-    fun start(owner: LifecycleOwner) {
+    /**
+     * Front camera if there is one, else back, else whatever else exists (a USB
+     * webcam on a TV box). Any failure — no camera, a camera held by another app,
+     * a broken HAL — reports [onUnavailable] instead of crashing the kiosk.
+     */
+    fun start(owner: LifecycleOwner, onStarted: (lens: String) -> Unit, onUnavailable: (why: String) -> Unit) {
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
-            val p = future.get()
-            provider = p
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-            analysis.setAnalyzer(executor) { image ->
-                try {
-                    val now = System.currentTimeMillis()
-                    if (now - lastSampleMs >= 330) {   // ~3 fps is plenty
-                        lastSampleMs = now
-                        analyze(image.planes[0].buffer, image.width, image.height, image.planes[0].rowStride)
-                    }
-                } finally {
-                    image.close()
+            if (stopped) return@addListener
+            try {
+                val p = future.get()
+                val (selector, lens) = when {
+                    p.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA to "front"
+                    p.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA to "back"
+                    else -> p.availableCameraInfos.firstOrNull()?.cameraSelector?.let { it to "external" }
+                        ?: run { onUnavailable("no camera found"); return@addListener }
                 }
+                val a = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                a.setAnalyzer(executor) { image ->
+                    try {
+                        val now = System.currentTimeMillis()
+                        if (now - lastSampleMs >= 330) {   // ~3 fps is plenty
+                            lastSampleMs = now
+                            analyze(image.planes[0].buffer, image.width, image.height, image.planes[0].rowStride)
+                        }
+                    } finally {
+                        image.close()
+                    }
+                }
+                p.unbindAll()
+                p.bindToLifecycle(owner, selector, a)
+                provider = p
+                analysis = a
+                onStarted(lens)
+            } catch (e: Exception) {
+                onUnavailable(e.message ?: e.javaClass.simpleName)
             }
-            val selector = if (p.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA))
-                CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-            p.unbindAll()
-            p.bindToLifecycle(owner, selector, analysis)
         }, ContextCompat.getMainExecutor(context))
     }
 
     fun stop() {
+        stopped = true
+        analysis?.clearAnalyzer()
         provider?.unbindAll()
         provider = null
+        analysis = null
         prev = null
+        executor.shutdown()
     }
 
     /** Call on screen sleep/wake so the lighting shift is not read as motion. */
