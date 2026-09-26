@@ -11,8 +11,8 @@ android {
     applicationId = "dev.aryan.panelkiosk"
     minSdk = 23          // Android 6.0; older WebViews are too old to run the dashboard anyway
     targetSdk = 35
-    versionCode = 3
-    versionName = "1.2"
+    versionCode = 4
+    versionName = "1.3"
   }
   buildTypes {
     release {
@@ -31,6 +31,7 @@ dependencies {
   implementation("androidx.core:core-ktx:1.15.0")
   implementation("androidx.appcompat:appcompat:1.7.0")
   implementation("androidx.webkit:webkit:1.12.1")
+  implementation("androidx.lifecycle:lifecycle-service:2.6.2") // camera service, see MotionService
   val camerax = "1.4.1"
   implementation("androidx.camera:camera-core:$camerax")
   implementation("androidx.camera:camera-camera2:$camerax")

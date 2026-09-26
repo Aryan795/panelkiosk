@@ -10,6 +10,11 @@
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
   <!-- Android 14+: a wake lock may only switch the screen on with this -->
   <uses-permission android:name="android.permission.TURN_SCREEN_ON" />
+  <!-- camera motion wake runs as a foreground service so it keeps watching with the screen off -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+  <!-- Android 13+: optional, shows that service's "watching for motion" notification -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
   <!-- Nothing here is required, so any phone, tablet or TV box can install it.
        CAMERA would otherwise imply a mandatory back camera with autofocus. -->
@@ -45,6 +50,11 @@
         <category android:name="android.intent.category.DEFAULT" />
       </intent-filter>
     </activity>
+
+    <service
+      android:name=".MotionService"
+      android:exported="false"
+      android:foregroundServiceType="camera" />
 
     <receiver android:name=".BootReceiver" android:exported="true">
       <intent-filter>

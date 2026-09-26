@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.app.ActivityManager
+import android.app.AppOpsManager
 import android.app.AlertDialog
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
@@ -61,11 +62,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var screen: ScreenController
     private lateinit var api: ApiServer
     private lateinit var owner: OwnerTools
-    private var motion: MotionDetector? = null
-    private var cameraStatus = "off"
     private var cornerTaps = 0
     private var lastTapMs = 0L
-    private var lastMotionWakeMs = 0L
     /** the renderer died: the WebView is destroyed and must not be touched again */
     private var webDead = false
 
@@ -105,6 +103,8 @@ class MainActivity : AppCompatActivity() {
 
         screen = ScreenController(this, blackout, prefs)
         api = ApiServer(prefs, screen, onReboot = { owner.reboot() })
+        // the camera service calls this on motion — also while the display is off
+        MotionService.onMotionListener = motionListener
 
         web.settings.apply {
             javaScriptEnabled = true
@@ -271,53 +271,49 @@ class MainActivity : AppCompatActivity() {
             "Make PanelKiosk the Home app for a reliable kiosk."
     }
 
+    private val motionListener: () -> Unit = {
+        screen.wake()               // lift the dim cover (the service has lit the display)
+        notifyPage("kiosk-motion")  // the dashboard tells the server, which restarts its idle timer
+    }
+
+    /** Start, retune or stop the camera service. It must start while we're in front (Android 11+). */
     private fun ensureCamera() {
-        if (!prefs.motionWake) { stopMotion(); return }
+        if (!prefs.motionWake) { MotionService.stop(this); return }
         if (!packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
-            cameraStatus = "no camera on this device"
+            MotionService.status = "no camera on this device"
             return
         }
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1)
+            val ask = mutableListOf(Manifest.permission.CAMERA)
+            // optional: shows the "watching for motion" notification; the service runs either way
+            if (Build.VERSION.SDK_INT >= 33) ask.add(Manifest.permission.POST_NOTIFICATIONS)
+            ActivityCompat.requestPermissions(this, ask.toTypedArray(), 1)
             return
         }
-        startMotion()
+        MotionService.start(this)
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<String>, results: IntArray) {
         super.onRequestPermissionsResult(code, perms, results)
         if (code != 1) return
-        if (results.firstOrNull() == PackageManager.PERMISSION_GRANTED) startMotion()
-        else cameraStatus = "camera permission denied"
+        val camera = perms.indexOf(Manifest.permission.CAMERA)
+        if (camera >= 0 && results.getOrNull(camera) == PackageManager.PERMISSION_GRANTED) MotionService.start(this)
+        else MotionService.status = "camera permission denied"
     }
 
-    private fun startMotion() {
-        if (motion != null) return
-        cameraStatus = "starting"
-        motion = MotionDetector(this) {
-            val now = System.currentTimeMillis()
-            if (now - lastMotionWakeMs > 5000) {
-                lastMotionWakeMs = now
-                val wasOff = !screen.screenOn
-                screen.wake()
-                if (wasOff) motion?.rebaseline()
-                notifyPage("kiosk-motion")
-            }
-        }.also {
-            it.sensitivity = prefs.sensitivity
-            it.start(
-                this,
-                onStarted = { lens -> cameraStatus = "watching ($lens camera)" },
-                onUnavailable = { why -> stopMotion(); cameraStatus = "unavailable: $why" },
-            )
-        }
-    }
-
-    private fun stopMotion() {
-        motion?.stop()
-        motion = null
-        cameraStatus = "off"
+    /**
+     * Android 14+ lets the user revoke "Turn screen on" special access, and then no
+     * wake lock can light the display. There's no public API for it, so check the
+     * app op by name and assume allowed if this Android doesn't know it.
+     */
+    private fun canTurnScreenOn(): Boolean {
+        if (Build.VERSION.SDK_INT < 34) return true
+        return runCatching {
+            val mode = getSystemService(AppOpsManager::class.java)
+                .unsafeCheckOpNoThrow("android:turn_screen_on", applicationInfo.uid, packageName)
+            mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_DEFAULT
+        }.getOrDefault(true)
     }
 
     private fun notifyPage(event: String) {
@@ -381,13 +377,25 @@ class MainActivity : AppCompatActivity() {
             isChecked = prefs.lockApp
         }
         val trueOffCb = CheckBox(ctx).apply {
-            text = "True screen off when idle (disables camera wake while off)"
+            text = "True screen off when idle — the camera keeps watching and switches it back on " +
+                "(set the lock screen to None or Swipe)"
             isChecked = prefs.trueOff
         }
 
         listOf(url, pass, rotation, motionCb).forEach { col.addView(it) }
-        col.addView(note("Camera: $cameraStatus"))
+        col.addView(note("Camera: ${MotionService.status}"))
         listOf(sens, lockCb, trueOffCb).forEach { col.addView(it) }
+        if (prefs.trueOff && !owner.isAdmin) {
+            col.addView(note("No device admin: Android's own screen timeout switches the display off, " +
+                "so set it short (15–30 s) in Display settings. Device admin turns it off at once."))
+        }
+        if (!canTurnScreenOn()) {
+            col.addView(note("Android is blocking PanelKiosk from switching the screen on. Allow it in " +
+                "Settings → Apps → Special app access → Turn screen on."))
+            col.addView(action("Open PanelKiosk's app settings") {
+                openSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+            })
+        }
 
         col.addView(note(bootStatus()))
         if (!isHomeApp()) col.addView(action("Set as Home app (most reliable autostart)") {
@@ -435,8 +443,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.configured = true
                 applyOrientation()
                 if (prefs.trueOff && !owner.isAdmin) requestAdminIfNeeded()
-                ensureCamera()
-                motion?.sensitivity = prefs.sensitivity
+                ensureCamera() // also hands a new sensitivity to the running service
                 applyLockMode()
                 if (!prefs.askedBattery) { prefs.askedBattery = true; requestBatteryExemption() }
                 main.removeCallbacks(retryLoad)
@@ -476,7 +483,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
         api.stop()
-        motion?.stop()
+        // the camera service keeps running across a recreate; only drop our hook into it
+        if (MotionService.onMotionListener === motionListener) MotionService.onMotionListener = null
         if (!webDead) {
             (web.parent as? ViewGroup)?.removeView(web)
             web.destroy()
