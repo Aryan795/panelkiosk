@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputType
 import android.view.MotionEvent
@@ -65,9 +66,11 @@ class MainActivity : AppCompatActivity() {
     private var cornerTaps = 0
     private var lastTapMs = 0L
     private var lastMotionWakeMs = 0L
+    /** the renderer died: the WebView is destroyed and must not be touched again */
+    private var webDead = false
 
     private val main = Handler(Looper.getMainLooper())
-    private val retryLoad = Runnable { if (!isFinishing) web.loadUrl(prefs.url) }
+    private val retryLoad = Runnable { if (!isFinishing && !webDead) web.loadUrl(prefs.url) }
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,7 +170,18 @@ class MainActivity : AppCompatActivity() {
         // Low-memory devices kill the WebView renderer; unhandled, the app dies with it.
         @TargetApi(Build.VERSION_CODES.O)
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            main.postDelayed({ recreate() }, 1000)
+            // The WebView is unusable now: detach and destroy it at once, so no queued
+            // retry or motion event can reach it, then rebuild the activity.
+            webDead = true
+            main.removeCallbacks(retryLoad)
+            (view.parent as? ViewGroup)?.removeView(view)
+            view.destroy()
+            // A page that kills the renderer every time must not spin: back off 1 s → 60 s.
+            val now = SystemClock.elapsedRealtime()
+            renderCrashes = if (now - lastRenderCrashMs < 120_000) renderCrashes + 1 else 1
+            lastRenderCrashMs = now
+            val delayMs = minOf(60_000L, 1000L shl minOf(renderCrashes - 1, 6))
+            main.postDelayed({ recreate() }, delayMs)
             return true
         }
     }
@@ -308,6 +322,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun notifyPage(event: String) {
         runOnUiThread {
+            if (webDead) return@runOnUiThread
             web.evaluateJavascript("window.dispatchEvent(new Event('$event'))", null)
         }
     }
@@ -425,7 +440,7 @@ class MainActivity : AppCompatActivity() {
                 applyLockMode()
                 if (!prefs.askedBattery) { prefs.askedBattery = true; requestBatteryExemption() }
                 main.removeCallbacks(retryLoad)
-                web.loadUrl(prefs.url)
+                if (!webDead) web.loadUrl(prefs.url)
             }
         if (prefs.configured) dialog.setNegativeButton("Cancel", null)
         dialog.show()
@@ -462,8 +477,16 @@ class MainActivity : AppCompatActivity() {
         main.removeCallbacksAndMessages(null)
         api.stop()
         motion?.stop()
-        (web.parent as? ViewGroup)?.removeView(web)
-        web.destroy()
+        if (!webDead) {
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.destroy()
+        }
         super.onDestroy()
+    }
+
+    private companion object {
+        // survive recreate(), so the backoff sees consecutive crashes
+        var renderCrashes = 0
+        var lastRenderCrashMs = 0L
     }
 }
