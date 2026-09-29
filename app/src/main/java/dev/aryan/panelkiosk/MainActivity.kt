@@ -102,7 +102,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         screen = ScreenController(this, blackout, prefs)
-        api = ApiServer(prefs, screen, onReboot = { owner.reboot() })
+        api = ApiServer(applicationContext, prefs, screen, onReboot = { owner.reboot() })
         // the camera service calls this on motion — also while the display is off
         MotionService.onMotionListener = motionListener
 

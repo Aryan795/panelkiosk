@@ -1,5 +1,9 @@
 package dev.aryan.panelkiosk
 
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
@@ -14,6 +18,7 @@ import kotlin.concurrent.thread
  * work against it unmodified.
  */
 class ApiServer(
+    private val context: Context,
     private val prefs: Prefs,
     private val screen: ScreenController,
     private val onReboot: () -> Boolean,
@@ -62,7 +67,7 @@ class ApiServer(
                 body = when (params["cmd"]) {
                     "screenOn" -> { screen.wake(); ok("screenOn") }
                     "screenOff" -> { screen.sleep(); ok("screenOff") }
-                    "deviceInfo" -> """{"appVersionName":"PanelKiosk ${BuildConfig.VERSION_NAME}","screenOn":${screen.screenOn}}"""
+                    "deviceInfo" -> """{"appVersionName":"PanelKiosk ${BuildConfig.VERSION_NAME}","screenOn":${screen.screenOn}${batteryFields()}}"""
                     "rebootDevice" ->
                         if (onReboot()) ok("rebootDevice")
                         else """{"status":"error","statustext":"needs device owner"}"""
@@ -76,4 +81,22 @@ class ApiServer(
     }
 
     private fun ok(cmd: String) = """{"status":"OK","statustext":"$cmd"}"""
+
+    /**
+     * Battery state as extra deviceInfo fields, named as in Fully's API. The temperature is the
+     * battery's: the only one Android reports without root, and the one that matters for a phone
+     * charging inside an enclosure.
+     */
+    private fun batteryFields(): String {
+        // ACTION_BATTERY_CHANGED is sticky: a null receiver just returns the latest state
+        val b = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return ""
+        val level = b.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = b.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1)
+        val tenths = b.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+        val plugged = b.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+        var fields = ""","isPlugged":$plugged"""
+        if (level >= 0) fields += ""","batteryLevel":${level * 100 / scale}"""
+        if (tenths != Int.MIN_VALUE) fields += ""","batteryTemperature":${tenths / 10.0}"""
+        return fields
+    }
 }
