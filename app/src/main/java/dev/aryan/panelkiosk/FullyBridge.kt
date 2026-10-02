@@ -8,14 +8,16 @@ import android.webkit.JavascriptInterface
  */
 class FullyBridge(private val screen: ScreenController) {
 
-    @JavascriptInterface
-    fun turnScreenOn() = screen.wake()
+    // a page that switches the screen itself runs its own sleep timer; ours stands down
 
     @JavascriptInterface
-    fun turnScreenOff() = screen.sleep()
+    fun turnScreenOn() { screen.pageDrivesSleep = true; screen.wake() }
 
     @JavascriptInterface
-    fun turnScreenOff(keepAlive: Boolean) = screen.sleep()
+    fun turnScreenOff() { screen.pageDrivesSleep = true; screen.sleep() }
+
+    @JavascriptInterface
+    fun turnScreenOff(keepAlive: Boolean) = turnScreenOff()
 
     @JavascriptInterface
     fun setScreenBrightness(v: Float) = screen.setBrightness(v / 255f)

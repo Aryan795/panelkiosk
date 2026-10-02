@@ -126,7 +126,7 @@ class ApiServer(
 
     private fun deviceInfo() = JSONObject().apply {
         put("appVersionName", "PanelKiosk ${BuildConfig.VERSION_NAME}")
-        put("screenOn", screen.screenOn)
+        put("screenOn", screen.displayLit) // the real display, not just what was last asked for
         putBattery(this)
     }
 

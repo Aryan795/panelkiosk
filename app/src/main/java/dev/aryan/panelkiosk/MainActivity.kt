@@ -12,7 +12,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.PointF
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -22,6 +24,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputType
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -41,6 +44,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -64,6 +68,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var owner: OwnerTools
     private var cornerTaps = 0
     private var lastTapMs = 0L
+    /** where a finger landed in the bottom-right corner, while it might become a settings swipe */
+    private var swipeStart: PointF? = null
+    /** a settings swipe fired: the rest of that touch stays away from the page */
+    private var swallowGesture = false
+    /** the settings dialog while it's open */
+    private var settingsDialog: AlertDialog? = null
     /** the renderer died: the WebView is destroyed and must not be touched again */
     private var webDead = false
 
@@ -124,17 +134,43 @@ class MainActivity : AppCompatActivity() {
         }
         web.addJavascriptInterface(FullyBridge(screen), "fully")
 
-        // five quick taps in the top-left corner open the settings (64dp, so the
-        // target is the same physical size on any screen density)
-        val hotCorner = 64 * resources.displayMetrics.density
-        web.setOnTouchListener { _, ev ->
-            if (ev.actionMasked == MotionEvent.ACTION_DOWN && ev.x < hotCorner && ev.y < hotCorner) {
-                val now = System.currentTimeMillis()
-                cornerTaps = if (now - lastTapMs < 1200) cornerTaps + 1 else 1
-                lastTapMs = now
-                if (cornerTaps >= 5) { cornerTaps = 0; showSettings() }
+        // Two ways into the settings, sized in dp so they're the same physical size on any screen:
+        // a swipe in from the bottom-right corner, or five quick taps in the top-left one.
+        val density = resources.displayMetrics.density
+        val hotCorner = 64 * density
+        val swipeZone = 72 * density
+        val swipeDistance = 80 * density
+        web.setOnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    screen.userActivity()
+                    swallowGesture = false
+                    swipeStart = if (ev.x > v.width - swipeZone && ev.y > v.height - swipeZone) PointF(ev.x, ev.y) else null
+                    if (ev.x < hotCorner && ev.y < hotCorner) {
+                        val now = System.currentTimeMillis()
+                        cornerTaps = if (now - lastTapMs < 1200) cornerTaps + 1 else 1
+                        lastTapMs = now
+                        if (cornerTaps >= 5) { cornerTaps = 0; showSettings() }
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> swipeStart?.let { start ->
+                    if (ev.eventTime - ev.downTime > 1500) {
+                        swipeStart = null // a slow drag from the corner is the page's
+                    } else if (start.x - ev.x >= swipeDistance || start.y - ev.y >= swipeDistance) {
+                        swipeStart = null
+                        swallowGesture = true
+                        // the page saw the finger land; end its touch so it neither scrolls nor clicks
+                        val cancel = MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_CANCEL }
+                        v.onTouchEvent(cancel)
+                        cancel.recycle()
+                        v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        showSettings()
+                    }
+                }
             }
-            false
+            // while a corner swipe may be starting, the page doesn't see it move (so it can't
+            // scroll first); a swipe that fires gets a cancel, anything else just a tap
+            swallowGesture || (swipeStart != null && ev.actionMasked == MotionEvent.ACTION_MOVE)
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -153,10 +189,28 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         applyLockMode()
+        screen.inBackground = false
+        // Back in front with the display on after sleep(). Within a few seconds that's Android
+        // relighting the display behind lockNow(), not a person: put it back, or a client that
+        // saw the off (the printer's Pi) would never send another. Later it's the power button or
+        // double-tap-to-wake, which nothing else reports: wake so the idle timer restarts.
+        if (!screen.screenOn) {
+            if (screen.msSinceSleep() < RELIGHT_MS) screen.sleep() else screen.wake()
+        }
+    }
+
+    override fun onPause() {
+        screen.inBackground = true
+        super.onPause()
     }
 
     /** Keeps a kiosk alive through the failures a wall panel actually meets. */
     private inner class KioskClient : WebViewClient() {
+        // a new page hasn't claimed the screen yet; until it calls window.fully, the idle timer runs
+        override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+            screen.pageDrivesSleep = false
+        }
+
         // Right after boot Wi-Fi is often not up yet, or the server is restarting:
         // show a holding page and keep retrying rather than strand the error page.
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -366,15 +420,102 @@ class MainActivity : AppCompatActivity() {
             setSelection(rotations.indexOfFirst { it.first == prefs.orientation }.coerceAtLeast(0))
         }
         val motionCb = CheckBox(ctx).apply { text = "Camera motion wake"; isChecked = prefs.motionWake }
-        val sensitivities = listOf("low", "medium", "high")
-        val sens = Spinner(ctx).apply {
-            adapter = ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, sensitivities)
-            setSelection(sensitivities.indexOf(prefs.sensitivity).coerceAtLeast(0))
+        // Sensitivity 1-MAX_LEVEL with a live meter. The slider retunes the running camera at once, so
+        // waving at the panel shows what the level does; Cancel puts the saved level back.
+        val sensLabel = TextView(ctx).apply { setPadding(0, pad / 2, 0, 0) }
+        fun showLevel(level: Int) {
+            sensLabel.text = "Camera sensitivity: $level of ${MotionDetector.MAX_LEVEL}  " +
+                "(1 = only big movement, ${MotionDetector.MAX_LEVEL} = the slightest change)"
         }
+        showLevel(prefs.sensitivityLevel)
+        val sens = SeekBar(ctx).apply {
+            max = MotionDetector.MAX_LEVEL - 1
+            progress = prefs.sensitivityLevel - 1
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                    showLevel(progress + 1)
+                    MotionService.active?.level = progress + 1
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) {}
+                override fun onStopTrackingTouch(bar: SeekBar) {}
+            })
+        }
+        val meter = MotionMeter(ctx)
+        val meterNote = note("")
+        val meterTick = object : Runnable {
+            override fun run() {
+                val d = MotionService.active
+                if (d == null) {
+                    meter.show(0f, 0f, false)
+                    meterNote.text = "Motion meter: the camera isn't watching. Tick camera motion wake and Save."
+                } else {
+                    val fired = SystemClock.elapsedRealtime() - d.lastFiredMs < 1500
+                    meter.show(d.lastChanged, d.triggerShare, fired)
+                    meterNote.text = "Motion now: %.1f%% of the picture changed · wakes at %.1f%%%s".format(
+                        d.lastChanged * 100, d.triggerShare * 100, if (fired) " · MOTION" else "")
+                }
+                main.postDelayed(this, 250)
+            }
+        }
+        // Calibrate: measure the still room for a few seconds and move the slider to the most
+        // sensitive level its own flicker and sensor noise stay well clear of
+        val calibNote = note("")
+        val calibLabel = "Calibrate: you get $SETTLE_SECONDS s to step out of view, then $CALIBRATE_SECONDS s of measuring"
+        val calibrate = Button(ctx).apply { text = calibLabel; isAllCaps = false }
+        var calibLeft = 0 // seconds to go: settling first, measuring for the last CALIBRATE_SECONDS
+        val calibTick = object : Runnable {
+            override fun run() {
+                val d = MotionService.active
+                if (d != null && calibLeft > 0) {
+                    // walking out of view is movement, not room noise: measure only once settled
+                    if (calibLeft == CALIBRATE_SECONDS) d.startCalibration()
+                    calibrate.text = if (calibLeft > CALIBRATE_SECONDS)
+                        "Step out of the camera's view… measuring in ${calibLeft - CALIBRATE_SECONDS} s"
+                    else "Measuring… keep out of view ($calibLeft s)"
+                    calibLeft--
+                    main.postDelayed(this, 1000)
+                    return
+                }
+                calibrate.isEnabled = true
+                calibrate.text = calibLabel
+                val cal = d?.finishCalibration()
+                if (cal == null || cal.samples < CALIBRATE_SECONDS * 2) {
+                    calibNote.text = "Calibration didn't get enough camera frames. Try again."
+                    return
+                }
+                val level = MotionDetector.safestLevel(cal)
+                if (level == 0) {
+                    calibNote.text = "The picture kept changing, so something moved. Try again with the room still."
+                    return
+                }
+                sens.progress = level - 1 // previews it on the camera, like dragging the slider
+                showLevel(level)
+                d?.level = level
+                calibNote.text = ("Calibrated: level %d. With nothing moving, up to %.1f%% of the picture " +
+                    "changed at that level; it wakes at %.1f%%. Save to keep it.").format(
+                    level, cal.worst[level - 1] * 100, MotionDetector.LEVELS[level - 1].second * 100)
+            }
+        }
+        calibrate.setOnClickListener {
+            if (MotionService.active == null) {
+                calibNote.text = "Tick camera motion wake and Save first; calibration needs the camera watching."
+                return@setOnClickListener
+            }
+            calibLeft = SETTLE_SECONDS + CALIBRATE_SECONDS
+            calibrate.isEnabled = false
+            calibNote.text = ""
+            main.post(calibTick)
+        }
+        var saved = false
         val lockCb = CheckBox(ctx).apply {
             text = "Lock app (kiosk pinning" +
                 (if (owner.isOwner) ", silent)" else " — Android shows a pinning prompt without device owner)")
             isChecked = prefs.lockApp
+        }
+        val idle = EditText(ctx).apply {
+            hint = "Sleep after minutes without motion or touch (0 = never)"
+            setText(prefs.idleMinutes.takeIf { it > 0 }?.toString() ?: "")
+            inputType = InputType.TYPE_CLASS_NUMBER
         }
         val trueOffCb = CheckBox(ctx).apply {
             text = "True screen off when idle — the camera keeps watching and switches it back on " +
@@ -384,7 +525,16 @@ class MainActivity : AppCompatActivity() {
 
         listOf(url, pass, rotation, motionCb).forEach { col.addView(it) }
         col.addView(note("Camera: ${MotionService.status}"))
-        listOf(sens, lockCb, trueOffCb).forEach { col.addView(it) }
+        listOf(sensLabel, sens).forEach { col.addView(it) }
+        col.addView(meter, LinearLayout.LayoutParams(-1, (14 * resources.displayMetrics.density).toInt())
+            .apply { topMargin = pad / 4 })
+        col.addView(meterNote)
+        col.addView(calibrate)
+        col.addView(calibNote)
+        col.addView(lockCb)
+        col.addView(note("Sleep after this many minutes without camera motion or a touch. Leave empty " +
+            "if the page switches the screen itself (webapp-dash does, and then this is ignored)."))
+        listOf(idle, trueOffCb).forEach { col.addView(it) }
         if (prefs.trueOff && !owner.isAdmin) {
             col.addView(note("No device admin: Android's own screen timeout switches the display off, " +
                 "so set it short (15–30 s) in Display settings. Device admin turns it off at once."))
@@ -420,7 +570,8 @@ class MainActivity : AppCompatActivity() {
             owner.releaseOwnership()
             Toast.makeText(ctx, "Device owner released", Toast.LENGTH_LONG).show()
         })
-        col.addView(note("Reopen these settings any time: five quick taps in the top-left corner."))
+        col.addView(note("Reopen these settings any time: swipe in from the bottom-right corner, " +
+            "or tap the top-left corner five times quickly."))
 
         val dialog = AlertDialog.Builder(ctx)
             .setTitle("PanelKiosk ${BuildConfig.VERSION_NAME}")
@@ -433,24 +584,41 @@ class MainActivity : AppCompatActivity() {
                     showSettings()
                     return@setPositiveButton
                 }
+                saved = true
                 prefs.url = address
                 prefs.apiPassword = pass.text.toString().trim()
                 prefs.orientation = rotations[rotation.selectedItemPosition].first
                 prefs.motionWake = motionCb.isChecked
-                prefs.sensitivity = sens.selectedItem as String
+                prefs.sensitivityLevel = sens.progress + 1
                 prefs.lockApp = lockCb.isChecked
                 prefs.trueOff = trueOffCb.isChecked
+                prefs.idleMinutes = idle.text.toString().trim().toIntOrNull()?.coerceIn(0, 24 * 60) ?: 0
                 prefs.configured = true
                 applyOrientation()
                 if (prefs.trueOff && !owner.isAdmin) requestAdminIfNeeded()
                 ensureCamera() // also hands a new sensitivity to the running service
                 applyLockMode()
                 if (!prefs.askedBattery) { prefs.askedBattery = true; requestBatteryExemption() }
+                screen.userActivity() // a changed timeout applies now
                 main.removeCallbacks(retryLoad)
                 if (!webDead) web.loadUrl(prefs.url)
             }
         if (prefs.configured) dialog.setNegativeButton("Cancel", null)
-        dialog.show()
+        val shown = dialog.show()
+        settingsDialog = shown
+        screen.settingsOpen = true
+        shown.setOnDismissListener {
+            main.removeCallbacks(meterTick)
+            main.removeCallbacks(calibTick)
+            MotionService.active?.finishCalibration()
+            if (!saved) MotionService.active?.level = prefs.sensitivityLevel // undo the slider's preview
+            // Save with no URL reopens the settings before this one closes; that one is current now
+            if (settingsDialog === shown) {
+                settingsDialog = null
+                screen.settingsOpen = false
+            }
+        }
+        main.post(meterTick)
     }
 
     private fun requestAdminIfNeeded() {
@@ -481,7 +649,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // Close the settings through their own dismiss path, which puts back a previewed
+        // sensitivity and stops a calibration; a dialog destroyed with the activity never runs it.
+        settingsDialog?.dismiss()
         main.removeCallbacksAndMessages(null)
+        screen.release()
         api.stop()
         // the camera service keeps running across a recreate; only drop our hook into it
         if (MotionService.onMotionListener === motionListener) MotionService.onMotionListener = null
@@ -493,6 +665,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private companion object {
+        const val SETTLE_SECONDS = 5
+        const val CALIBRATE_SECONDS = 8
+        /** a resume this soon after sleep() is the display relighting on its own */
+        const val RELIGHT_MS = 3000L
+
         // survive recreate(), so the backoff sees consecutive crashes
         var renderCrashes = 0
         var lastRenderCrashMs = 0L

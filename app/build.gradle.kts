@@ -11,8 +11,8 @@ android {
     applicationId = "dev.aryan.panelkiosk"
     minSdk = 23          // Android 6.0; older WebViews are too old to run the dashboard anyway
     targetSdk = 35
-    versionCode = 5
-    versionName = "1.4"
+    versionCode = 12
+    versionName = "1.11"
   }
   buildTypes {
     release {

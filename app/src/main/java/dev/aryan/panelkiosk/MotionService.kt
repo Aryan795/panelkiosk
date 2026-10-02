@@ -69,7 +69,7 @@ class MotionService : LifecycleService() {
         }
         holdCpu()
         val d = detector
-        if (d == null) startDetector(prefs) else d.sensitivity = prefs.sensitivity
+        if (d == null) startDetector(prefs) else d.level = prefs.sensitivityLevel
         return START_STICKY
     }
 
@@ -109,7 +109,7 @@ class MotionService : LifecycleService() {
     private fun startDetector(prefs: Prefs) {
         status = "starting"
         detector = MotionDetector(this) { main.post(::onMotion) }.also {
-            it.sensitivity = prefs.sensitivity
+            it.level = prefs.sensitivityLevel
             it.start(
                 this,
                 onStarted = { lens -> status = "watching ($lens camera), also with the screen off" },
@@ -151,6 +151,9 @@ class MotionService : LifecycleService() {
 
         fun start(ctx: Context) = ContextCompat.startForegroundService(ctx, Intent(ctx, MotionService::class.java))
         fun stop(ctx: Context) { ctx.stopService(Intent(ctx, MotionService::class.java)) }
+
+        /** The camera's detector while it's watching, for the settings meter; null otherwise. */
+        val active: MotionDetector? get() = running?.detector
 
         /** Call when the panel's own light changes (sleep or wake), so it isn't read as motion. */
         fun rebaseline() { running?.detector?.rebaseline() }
