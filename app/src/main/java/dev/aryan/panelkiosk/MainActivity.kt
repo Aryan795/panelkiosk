@@ -193,9 +193,15 @@ class MainActivity : AppCompatActivity() {
         // Back in front with the display on after sleep(). Within a few seconds that's Android
         // relighting the display behind lockNow(), not a person: put it back, or a client that
         // saw the off (the printer's Pi) would never send another. Later it's the power button or
-        // double-tap-to-wake, which nothing else reports: wake so the idle timer restarts.
+        // double-tap-to-wake, which nothing else reports: wake so the idle timer restarts. Twice at
+        // most per sleep, so a device that keeps relighting can't flicker on and off for good.
         if (!screen.screenOn) {
-            if (screen.msSinceSleep() < RELIGHT_MS) screen.sleep() else screen.wake()
+            if (screen.msSinceSleep() < RELIGHT_MS && screen.relightResleeps < 2) {
+                screen.relightResleeps++
+                screen.sleep()
+            } else {
+                screen.wake()
+            }
         }
     }
 

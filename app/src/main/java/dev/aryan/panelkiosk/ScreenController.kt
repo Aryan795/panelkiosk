@@ -38,6 +38,9 @@ class ScreenController(private val activity: Activity, private val blackout: Vie
     @Volatile var screenOn: Boolean = true
         private set
 
+    /** Times onResume put the display back to sleep after Android relit it; every wake() resets it. */
+    var relightResleeps = 0
+
     @Volatile private var blackoutShown = false
     @Volatile private var sleptAtMs = 0L
     /** after release() (the activity is being destroyed) nothing may touch the window or lock the device */
@@ -113,6 +116,7 @@ class ScreenController(private val activity: Activity, private val blackout: Vie
         activity.runOnUiThread {
             if (released) return@runOnUiThread
             screenOn = true
+            relightResleeps = 0
             blackout.visibility = View.GONE
             blackoutShown = false
             setBrightness(-1f) // back to system brightness
