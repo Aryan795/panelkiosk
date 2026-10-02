@@ -23,13 +23,13 @@ import android.view.WindowManager
  *  - true off: the display really switches off — at once via device admin's
  *    lockNow(), or, without device admin, when Android's own screen timeout
  *    runs out. The camera keeps watching from MotionService and switches it
- *    back on, as do the dashboard server (HA motion sensors -> REST :2323) and
- *    the power button. Set the lock screen to None or Swipe; a PIN can't be
+ *    back on, as do the REST API (e.g. a Home Assistant automation on a motion
+ *    sensor) and the power button. Set the lock screen to None or Swipe; a PIN can't be
  *    bypassed, but the dashboard still shows over the lock screen.
  *
- * Who decides to sleep: a page that drives the screen through window.fully
- * (webapp-dash, whose server runs the motion timer), the REST API, or — for a
- * page that doesn't, like Home Assistant itself — the built-in idle timer:
+ * Who decides to sleep: a page that drives the screen through window.fully (a
+ * Fully-aware dashboard, or a page like KlipperScreen's kiosk.html), the REST API,
+ * or — for a page that doesn't, which is most of them — the built-in idle timer:
  * `idleMinutes` without camera motion or a touch.
  */
 class ScreenController(private val activity: Activity, private val blackout: View, private val prefs: Prefs) {

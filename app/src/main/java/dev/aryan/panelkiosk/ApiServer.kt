@@ -19,8 +19,8 @@ import kotlin.concurrent.thread
 
 /**
  * Minimal HTTP server on :2323 speaking the Fully Kiosk Remote Admin dialect
- * (`/?cmd=screenOn&password=...`), enough for the dashboard server's
- * `screen.fullyHost` config and plain HTTP clients. It is not a full Fully
+ * (`/?cmd=screenOn&password=...`), enough for a Home Assistant `rest_command`, a
+ * Moonraker power device and other plain HTTP clients. It is not a full Fully
  * implementation: Home Assistant's Fully Kiosk integration needs deviceID,
  * deviceName, Mac and the settings commands, which it doesn't offer.
  */

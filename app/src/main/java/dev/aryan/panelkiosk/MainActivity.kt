@@ -327,7 +327,7 @@ class MainActivity : AppCompatActivity() {
 
     private val motionListener: () -> Unit = {
         screen.wake()               // lift the dim cover (the service has lit the display)
-        notifyPage("kiosk-motion")  // the dashboard tells the server, which restarts its idle timer
+        notifyPage("kiosk-motion")  // for pages that run their own sleep timer
     }
 
     /** Start, retune or stop the camera service. It must start while we're in front (Android 11+). */
@@ -532,8 +532,8 @@ class MainActivity : AppCompatActivity() {
         col.addView(calibrate)
         col.addView(calibNote)
         col.addView(lockCb)
-        col.addView(note("Sleep after this many minutes without camera motion or a touch. Leave empty " +
-            "if the page switches the screen itself (webapp-dash does, and then this is ignored)."))
+        col.addView(note("Sleep after this many minutes without camera motion or a touch. Empty " +
+            "means never. A page that switches the screen itself overrides this; most don't."))
         listOf(idle, trueOffCb).forEach { col.addView(it) }
         if (prefs.trueOff && !owner.isAdmin) {
             col.addView(note("No device admin: Android's own screen timeout switches the display off, " +

@@ -33,7 +33,7 @@ class Prefs(ctx: Context) {
 
     /**
      * Minutes without camera motion or a touch before the panel sleeps by itself; 0 = never.
-     * Stands down while the page drives the screen through window.fully (webapp-dash does).
+     * Stands down while the page drives the screen through window.fully (most pages don't).
      */
     var idleMinutes: Int
         get() = sp.getInt("idleMinutes", 0)
